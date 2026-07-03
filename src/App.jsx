@@ -1,0 +1,539 @@
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { Plus, Download, ChevronDown, ChevronRight, Trash2, Users, LayoutDashboard, ClipboardList, LogOut } from "lucide-react";
+import * as XLSX from "xlsx";
+import { supabase, configured } from "./supabaseClient";
+
+const NAMES = ["양진환", "김윤교", "김주형", "이동호"];
+const MONTHS = ["7월", "8월", "9월"];
+const CALL_KEYS = ["call1", "call2", "call3", "call4", "call5", "call6"];
+const CALL_LABELS = ["1차콜", "2차콜", "3차콜", "4차콜", "5차콜", "6차콜"];
+const CALL_OPTS = ["", "받음", "안받음"];
+const INTENT_OPTS = ["", "부재", "재통화요청", "거절", "상담요청", "비대면상담요청", "교환대상"];
+const YESNO_OPTS = ["", "예", "아니오"];
+
+const METRICS = [
+  { key: "total", label: "DB구매수", fmt: (v) => v },
+  { key: "callRate", label: "콜받음전환율", fmt: (v) => pct(v) },
+  { key: "seatRate", label: "싯플랜확정율", fmt: (v) => pct(v) },
+  { key: "consultRate", label: "상담확정율", fmt: (v) => pct(v) },
+  { key: "closingRate", label: "클로징확정율", fmt: (v) => pct(v) },
+  { key: "premium", label: "월납보험료 합계", fmt: (v) => won(v) },
+];
+
+function pct(v) {
+  return `${(v * 100).toFixed(1)}%`;
+}
+function won(v) {
+  return `${Math.round(v).toLocaleString("ko-KR")}원`;
+}
+function uid() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+function formatDate(v) {
+  if (!v) return "";
+  const t = String(v).trim();
+  return /^\d{1,2}$/.test(t) ? `${t}일` : t;
+}
+function emptyEntry(owner, month) {
+  const e = { id: uid(), owner, purchaseMonth: month, purchaseDate: "", customerName: "", intent: "", seatplan: "", consult: "", closing: "", premium: "", note: "" };
+  CALL_KEYS.forEach((k) => (e[k] = ""));
+  return e;
+}
+function computeStats(list) {
+  const total = list.length;
+  const callOk = list.filter((e) => CALL_KEYS.some((k) => e[k] === "받음")).length;
+  const seat = list.filter((e) => e.seatplan === "예").length;
+  const consult = list.filter((e) => e.consult === "예").length;
+  const closing = list.filter((e) => e.closing === "예").length;
+  const premium = list.reduce((s, e) => s + (parseFloat(e.premium) || 0), 0);
+  return {
+    total,
+    callRate: total ? callOk / total : 0,
+    seatRate: total ? seat / total : 0,
+    consultRate: total ? consult / total : 0,
+    closingRate: total ? closing / total : 0,
+    premium,
+  };
+}
+
+// Supabase row(snake_case) <-> 앱 내부 entry(camelCase) 변환
+function fromRow(r) {
+  return {
+    id: r.id,
+    owner: r.owner || "",
+    purchaseMonth: r.purchase_month || "",
+    purchaseDate: r.purchase_date || "",
+    customerName: r.customer_name || "",
+    call1: r.call1 || "",
+    call2: r.call2 || "",
+    call3: r.call3 || "",
+    call4: r.call4 || "",
+    call5: r.call5 || "",
+    call6: r.call6 || "",
+    intent: r.intent || "",
+    seatplan: r.seatplan || "",
+    consult: r.consult || "",
+    closing: r.closing || "",
+    premium: r.premium ?? "",
+    note: r.note || "",
+  };
+}
+function toRow(e) {
+  return {
+    id: e.id,
+    owner: e.owner,
+    purchase_month: e.purchaseMonth,
+    purchase_date: e.purchaseDate,
+    customer_name: e.customerName,
+    call1: e.call1,
+    call2: e.call2,
+    call3: e.call3,
+    call4: e.call4,
+    call5: e.call5,
+    call6: e.call6,
+    intent: e.intent,
+    seatplan: e.seatplan,
+    consult: e.consult,
+    closing: e.closing,
+    premium: e.premium === "" ? 0 : parseFloat(e.premium) || 0,
+    note: e.note,
+  };
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="flex flex-col gap-1 text-xs text-slate-500">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+const inputCls =
+  "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200";
+const selectCls = inputCls + " appearance-none";
+
+function EntryCard({ entry, onChange, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const callDone = CALL_KEYS.filter((k) => entry[k]).length;
+  const badge =
+    entry.closing === "예" ? "bg-emerald-100 text-emerald-700" : entry.consult === "예" ? "bg-sky-100 text-sky-700" : entry.seatplan === "예" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500";
+  const badgeText = entry.closing === "예" ? "클로징확정" : entry.consult === "예" ? "상담확정" : entry.seatplan === "예" ? "싯플랜확정" : "진행중";
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
+        <div className="flex min-w-0 items-center gap-2">
+          {open ? <ChevronDown size={16} className="shrink-0 text-slate-400" /> : <ChevronRight size={16} className="shrink-0 text-slate-400" />}
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-800">{entry.customerName || "(고객명 미입력)"}</div>
+            <div className="truncate text-xs text-slate-400">
+              {entry.purchaseMonth} · {formatDate(entry.purchaseDate) || "일자 미입력"} · 콜 {callDone}/6
+            </div>
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${badge}`}>{badgeText}</span>
+      </button>
+
+      {open && (
+        <div className="space-y-3 border-t border-slate-100 px-3 pb-3 pt-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="구매월">
+              <div className="flex gap-1">
+                {MONTHS.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => onChange({ ...entry, purchaseMonth: m })}
+                    className={`flex-1 rounded-lg border px-1.5 py-1.5 text-xs font-medium ${
+                      entry.purchaseMonth === m ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 text-slate-500"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="구매일자">
+              <input className={inputCls} placeholder="예: 10 (숫자만 입력하면 자동으로 10일)" value={entry.purchaseDate} onChange={(e) => onChange({ ...entry, purchaseDate: e.target.value })} />
+            </Field>
+          </div>
+
+          <Field label="고객명">
+            <input className={inputCls} placeholder="고객명 입력" value={entry.customerName} onChange={(e) => onChange({ ...entry, customerName: e.target.value })} />
+          </Field>
+
+          <div>
+            <div className="mb-1 text-xs text-slate-500">통화 이력</div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {CALL_KEYS.map((k, i) => (
+                <select key={k} className={selectCls + " text-center"} value={entry[k]} onChange={(e) => onChange({ ...entry, [k]: e.target.value })}>
+                  {CALL_OPTS.map((o) => (
+                    <option key={o} value={o}>
+                      {o === "" ? CALL_LABELS[i] : `${CALL_LABELS[i]}: ${o}`}
+                    </option>
+                  ))}
+                </select>
+              ))}
+            </div>
+          </div>
+
+          <Field label="고객의사">
+            <select className={selectCls} value={entry.intent} onChange={(e) => onChange({ ...entry, intent: e.target.value })}>
+              {INTENT_OPTS.map((o) => (
+                <option key={o} value={o}>
+                  {o || "선택"}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              ["seatplan", "싯플랜확정"],
+              ["consult", "상담확정"],
+              ["closing", "클로징확정"],
+            ].map(([k, label]) => (
+              <Field key={k} label={label}>
+                <select className={selectCls} value={entry[k]} onChange={(e) => onChange({ ...entry, [k]: e.target.value })}>
+                  {YESNO_OPTS.map((o) => (
+                    <option key={o} value={o}>
+                      {o || "선택"}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ))}
+          </div>
+
+          <Field label="월납보험료 (원)">
+            <input className={inputCls} inputMode="numeric" placeholder="예: 240000" value={entry.premium} onChange={(e) => onChange({ ...entry, premium: e.target.value.replace(/[^0-9]/g, "") })} />
+          </Field>
+
+          <Field label="비고">
+            <input className={inputCls} placeholder="메모" value={entry.note} onChange={(e) => onChange({ ...entry, note: e.target.value })} />
+          </Field>
+
+          <button onClick={onDelete} className="flex items-center gap-1 text-xs font-medium text-rose-500">
+            <Trash2 size={13} /> 이 항목 삭제
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatGrid({ stats }) {
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      {METRICS.map((m) => (
+        <div key={m.key} className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className="text-[11px] text-slate-400">{m.label}</div>
+          <div className="mt-1 text-lg font-bold text-slate-800">{m.fmt(stats[m.key])}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MonthTable({ entries }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full min-w-[520px] text-sm">
+        <thead>
+          <tr className="bg-slate-800 text-white">
+            <th className="px-3 py-2 text-left font-medium">지표</th>
+            {MONTHS.map((m) => (
+              <th key={m} className="px-3 py-2 text-center font-medium">
+                {m}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {METRICS.map((m, i) => (
+            <tr key={m.key} className={i % 2 ? "bg-slate-50" : "bg-white"}>
+              <td className="px-3 py-2 text-slate-600">{m.label}</td>
+              {MONTHS.map((mo) => {
+                const stats = computeStats(entries.filter((e) => e.purchaseMonth === mo));
+                return (
+                  <td key={mo} className="px-3 py-2 text-center font-semibold text-slate-800">
+                    {m.fmt(stats[m.key])}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PersonRow({ name, entries }) {
+  const [open, setOpen] = useState(false);
+  const stats = computeStats(entries);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <button onClick={() => setOpen((o) => !o)} className="grid w-full grid-cols-6 items-center gap-1 px-3 py-2.5 text-left sm:gap-2">
+        <div className="col-span-1 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+          {open ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
+          {name}
+        </div>
+        {METRICS.slice(0, 5).map((m) => (
+          <div key={m.key} className="text-center text-xs text-slate-600 sm:text-sm">
+            {m.fmt(stats[m.key])}
+          </div>
+        ))}
+      </button>
+      {open && (
+        <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+          <div className="mb-2 text-xs text-slate-400">{name} 월별 현황</div>
+          <MonthTable entries={entries} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SetupNotice() {
+  return (
+    <div className="mx-auto mt-10 max-w-md rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+      <div className="font-semibold">Supabase 연결이 안 되어 있어요</div>
+      <p className="mt-1">
+        .env 파일에 <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_URL</code>과{" "}
+        <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code>를 넣고 다시 빌드/배포해주세요. (README.md 참고)
+      </p>
+    </div>
+  );
+}
+
+export default function App() {
+  const [loaded, setLoaded] = useState(false);
+  const [entries, setEntries] = useState([]);
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("pb_last_user") || null);
+  const [tab, setTab] = useState("entry");
+  const [monthFilter, setMonthFilter] = useState("7월");
+  const [showAllOwners, setShowAllOwners] = useState(false);
+
+  useEffect(() => {
+    if (!configured) {
+      setLoaded(true);
+      return;
+    }
+    let channel;
+    (async () => {
+      const { data, error } = await supabase.from("entries").select("*").order("created_at", { ascending: false });
+      if (!error && data) setEntries(data.map(fromRow));
+      setLoaded(true);
+
+      channel = supabase
+        .channel("entries-live")
+        .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, (payload) => {
+          setEntries((prev) => {
+            if (payload.eventType === "DELETE") {
+              return prev.filter((e) => e.id !== payload.old.id);
+            }
+            const next = fromRow(payload.new);
+            const exists = prev.some((e) => e.id === next.id);
+            return exists ? prev.map((e) => (e.id === next.id ? next : e)) : [next, ...prev];
+          });
+        })
+        .subscribe();
+    })();
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
+  function selectUser(name) {
+    setCurrentUser(name);
+    localStorage.setItem("pb_last_user", name);
+  }
+
+  async function addEntry() {
+    const e = emptyEntry(currentUser, monthFilter);
+    setEntries((prev) => [e, ...prev]);
+    await supabase.from("entries").insert(toRow(e));
+  }
+  async function updateEntry(id, next) {
+    setEntries((prev) => prev.map((e) => (e.id === id ? next : e)));
+    await supabase.from("entries").update(toRow(next)).eq("id", id);
+  }
+  async function deleteEntry(id) {
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+    await supabase.from("entries").delete().eq("id", id);
+  }
+
+  const myEntries = useMemo(() => (showAllOwners ? entries : entries.filter((e) => e.owner === currentUser)), [entries, showAllOwners, currentUser]);
+  const monthEntries = useMemo(() => myEntries.filter((e) => e.purchaseMonth === monthFilter), [myEntries, monthFilter]);
+
+  const [dashFilter, setDashFilter] = useState("전체");
+  const dashEntries = useMemo(() => (dashFilter === "전체" ? entries : entries.filter((e) => e.owner === dashFilter)), [entries, dashFilter]);
+  const cumStats = useMemo(() => computeStats(dashEntries), [dashEntries]);
+
+  function exportExcel() {
+    const wb = XLSX.utils.book_new();
+
+    const summary = [["전체 누적 현황", ""]];
+    METRICS.forEach((m) => summary.push([m.label, m.fmt(cumStats[m.key])]));
+    summary.push([]);
+    summary.push(["전체 월별 현황", ...MONTHS]);
+    METRICS.forEach((m) => {
+      const row = [m.label];
+      MONTHS.forEach((mo) => row.push(m.fmt(computeStats(entries.filter((e) => e.purchaseMonth === mo))[m.key])));
+      summary.push(row);
+    });
+    summary.push([]);
+    summary.push(["인원별 누적 비교", ...METRICS.map((m) => m.label)]);
+    NAMES.forEach((n) => {
+      const s = computeStats(entries.filter((e) => e.owner === n));
+      summary.push([n, ...METRICS.map((m) => m.fmt(s[m.key]))]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "전체현황");
+
+    const dataHeader = ["구매월", "구매일자", "고객명", ...CALL_LABELS, "고객의사", "싯플랜확정", "상담확정", "클로징확정", "월납보험료", "비고"];
+    NAMES.forEach((n) => {
+      const list = entries.filter((e) => e.owner === n);
+      const s = computeStats(list);
+      const rows = [[`${n} 누적 요약`, ""]];
+      METRICS.forEach((m) => rows.push([m.label, m.fmt(s[m.key])]));
+      rows.push([]);
+      rows.push(["월별 요약", ...MONTHS]);
+      METRICS.forEach((m) => {
+        const row = [m.label];
+        MONTHS.forEach((mo) => row.push(m.fmt(computeStats(list.filter((e) => e.purchaseMonth === mo))[m.key])));
+        rows.push(row);
+      });
+      rows.push([]);
+      rows.push(dataHeader);
+      list.forEach((e) => rows.push([e.purchaseMonth, formatDate(e.purchaseDate), e.customerName, ...CALL_KEYS.map((k) => e[k]), e.intent, e.seatplan, e.consult, e.closing, e.premium, e.note]));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), n);
+    });
+
+    XLSX.writeFile(wb, `파워지점_DB_테스터_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  if (!configured) return <SetupNotice />;
+
+  if (!loaded) {
+    return <div className="flex h-64 items-center justify-center text-sm text-slate-400">불러오는 중...</div>;
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="mx-auto flex min-h-[420px] max-w-sm flex-col items-center justify-center gap-6 px-6 py-16">
+        <div className="text-center">
+          <div className="text-xl font-bold text-slate-800">파워지점 DB 테스터</div>
+          <div className="mt-1 text-sm text-slate-400">누구세요? 이름을 선택하면 바로 시작합니다</div>
+        </div>
+        <div className="grid w-full grid-cols-2 gap-3">
+          {NAMES.map((n) => (
+            <button key={n} onClick={() => selectUser(n)} className="rounded-xl border border-slate-200 bg-white px-4 py-4 text-sm font-semibold text-slate-700 shadow-sm active:bg-slate-50">
+              {n}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => selectUser("관리자")} className="flex items-center gap-1.5 text-xs font-medium text-slate-400">
+          <Users size={14} /> 관리자로 대시보드만 보기
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl px-3 py-4 sm:px-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-base font-bold text-slate-800">파워지점 DB 테스터</div>
+          <div className="text-xs text-slate-400">{currentUser}님으로 접속중</div>
+        </div>
+        <button onClick={() => setCurrentUser(null)} className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-500">
+          <LogOut size={13} /> 전환
+        </button>
+      </div>
+
+      <div className="mb-4 flex rounded-xl bg-slate-100 p-1 text-sm">
+        <button onClick={() => setTab("entry")} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 font-medium ${tab === "entry" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500"}`}>
+          <ClipboardList size={15} /> 입력
+        </button>
+        <button onClick={() => setTab("dashboard")} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 font-medium ${tab === "dashboard" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500"}`}>
+          <LayoutDashboard size={15} /> 대시보드
+        </button>
+      </div>
+
+      {tab === "entry" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            {MONTHS.map((m) => (
+              <button
+                key={m}
+                onClick={() => setMonthFilter(m)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium ${monthFilter === m ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}
+              >
+                {m}
+              </button>
+            ))}
+            <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
+              <input type="checkbox" checked={showAllOwners} onChange={(e) => setShowAllOwners(e.target.checked)} />
+              전체보기
+            </label>
+          </div>
+
+          <button onClick={addEntry} className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-500 active:bg-slate-50">
+            <Plus size={16} /> {monthFilter} 신규 DB 추가
+          </button>
+
+          <div className="space-y-2">
+            {monthEntries.length === 0 && <div className="py-8 text-center text-sm text-slate-400">{monthFilter}에 등록된 DB가 없습니다</div>}
+            {monthEntries.map((e) => (
+              <EntryCard key={e.id} entry={e} onChange={(next) => updateEntry(e.id, next)} onDelete={() => deleteEntry(e.id)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === "dashboard" && (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
+            {["전체", ...NAMES].map((n) => (
+              <button key={n} onClick={() => setDashFilter(n)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${dashFilter === n ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}>
+                {n}
+              </button>
+            ))}
+            <button onClick={exportExcel} className="ml-auto flex items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-emerald-700">
+              <Download size={14} /> 엑셀 다운로드
+            </button>
+          </div>
+
+          <section>
+            <div className="mb-2 text-sm font-semibold text-slate-700">누적 전체 현황 {dashFilter !== "전체" && `· ${dashFilter}`}</div>
+            <StatGrid stats={cumStats} />
+          </section>
+
+          <section>
+            <div className="mb-2 text-sm font-semibold text-slate-700">월별 현황 {dashFilter !== "전체" && `· ${dashFilter}`}</div>
+            <MonthTable entries={dashEntries} />
+          </section>
+
+          {dashFilter === "전체" && (
+            <section>
+              <div className="mb-2 text-sm font-semibold text-slate-700">인원별 현황 (탭하면 월별 상세)</div>
+              <div className="grid grid-cols-6 gap-1 px-3 text-[11px] text-slate-400 sm:gap-2">
+                <div className="col-span-1">이름</div>
+                {METRICS.slice(0, 5).map((m) => (
+                  <div key={m.key} className="text-center">
+                    {m.label}
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                {NAMES.map((n) => (
+                  <PersonRow key={n} name={n} entries={entries.filter((e) => e.owner === n)} />
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
