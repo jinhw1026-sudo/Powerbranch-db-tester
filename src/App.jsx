@@ -9,6 +9,7 @@ const CALL_KEYS = ["call1", "call2", "call3", "call4", "call5", "call6"];
 const CALL_LABELS = ["1차콜", "2차콜", "3차콜", "4차콜", "5차콜", "6차콜"];
 const CALL_OPTS = ["", "받음", "안받음"];
 const INTENT_OPTS = ["", "부재", "재통화요청", "거절", "상담요청", "비대면상담요청", "교환대상"];
+const METHOD_OPTS = ["", "전화", "채팅"];
 const YESNO_OPTS = ["", "예", "아니오"];
 
 const METRICS = [
@@ -35,7 +36,7 @@ function formatDate(v) {
   return /^\d{1,2}$/.test(t) ? `${t}일` : t;
 }
 function emptyEntry(owner, month) {
-  const e = { id: uid(), owner, purchaseMonth: month, purchaseDate: "", customerName: "", intent: "", seatplan: "", consult: "", closing: "", premium: "", note: "" };
+  const e = { id: uid(), owner, purchaseMonth: month, purchaseDate: "", customerName: "", method: "전화", intent: "", seatplan: "", consult: "", closing: "", premium: "", note: "" };
   CALL_KEYS.forEach((k) => (e[k] = ""));
   return e;
 }
@@ -64,6 +65,7 @@ function fromRow(r) {
     purchaseMonth: r.purchase_month || "",
     purchaseDate: r.purchase_date || "",
     customerName: r.customer_name || "",
+    method: r.method || "전화",
     call1: r.call1 || "",
     call2: r.call2 || "",
     call3: r.call3 || "",
@@ -85,6 +87,7 @@ function toRow(e) {
     purchase_month: e.purchaseMonth,
     purchase_date: e.purchaseDate,
     customer_name: e.customerName,
+    method: e.method,
     call1: e.call1,
     call2: e.call2,
     call3: e.call3,
@@ -127,7 +130,7 @@ function EntryCard({ entry, onChange, onDelete }) {
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-800">{entry.customerName || "(고객명 미입력)"}</div>
             <div className="truncate text-xs text-slate-400">
-              {entry.purchaseMonth} · {formatDate(entry.purchaseDate) || "일자 미입력"} · 콜 {callDone}/6
+              {entry.purchaseMonth} · {formatDate(entry.purchaseDate) || "일자 미입력"}{entry.method === "채팅" ? " · 💬채팅" : ` · 콜 ${callDone}/6`}
             </div>
           </div>
         </div>
@@ -161,8 +164,24 @@ function EntryCard({ entry, onChange, onDelete }) {
             <input className={inputCls} placeholder="고객명 입력" value={entry.customerName} onChange={(e) => onChange({ ...entry, customerName: e.target.value })} />
           </Field>
 
+          <Field label="진행방식">
+            <div className="flex gap-1.5">
+              {["전화", "채팅"].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => onChange({ ...entry, method: m })}
+                  className={`flex-1 rounded-lg border px-2 py-2 text-xs font-medium ${
+                    entry.method === m ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 text-slate-500"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </Field>
+
           <div>
-            <div className="mb-1 text-xs text-slate-500">통화 이력</div>
+            <div className="mb-1 text-xs text-slate-500">통화 이력 {entry.method === "채팅" && <span className="text-slate-400">(채팅 건은 선택 안 해도 됩니다)</span>}</div>
             <div className="grid grid-cols-3 gap-1.5">
               {CALL_KEYS.map((k, i) => (
                 <select key={k} className={selectCls + " text-center"} value={entry[k]} onChange={(e) => onChange({ ...entry, [k]: e.target.value })}>
@@ -268,6 +287,98 @@ function MonthTable({ entries }) {
   );
 }
 
+// 관리자 열람용 읽기전용 카드 (수정 불가, 펼치면 상세 표시)
+function ReadonlyCard({ entry }) {
+  const [open, setOpen] = useState(false);
+  const callDone = CALL_KEYS.filter((k) => entry[k]).length;
+  const badge =
+    entry.closing === "예" ? "bg-emerald-100 text-emerald-700" : entry.consult === "예" ? "bg-sky-100 text-sky-700" : entry.seatplan === "예" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500";
+  const badgeText = entry.closing === "예" ? "클로징확정" : entry.consult === "예" ? "상담확정" : entry.seatplan === "예" ? "싯플랜확정" : "진행중";
+
+  const row = (label, value) => (
+    <div className="flex justify-between gap-2 py-1 text-xs">
+      <span className="text-slate-400">{label}</span>
+      <span className="text-right font-medium text-slate-700">{value || "-"}</span>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
+        <div className="flex min-w-0 items-center gap-2">
+          {open ? <ChevronDown size={16} className="shrink-0 text-slate-400" /> : <ChevronRight size={16} className="shrink-0 text-slate-400" />}
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-800">{entry.customerName || "(고객명 미입력)"}</div>
+            <div className="truncate text-xs text-slate-400">
+              {entry.purchaseMonth} · {formatDate(entry.purchaseDate) || "일자 미입력"}{entry.method === "채팅" ? " · 💬채팅" : ` · 콜 ${callDone}/6`}
+            </div>
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${badge}`}>{badgeText}</span>
+      </button>
+      {open && (
+        <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+          {row("구매월", entry.purchaseMonth)}
+          {row("구매일자", formatDate(entry.purchaseDate))}
+          {row("고객명", entry.customerName)}
+          {row("진행방식", entry.method)}
+          <div className="py-1 text-xs">
+            <div className="mb-1 text-slate-400">통화 이력</div>
+            <div className="grid grid-cols-3 gap-1">
+              {CALL_KEYS.map((k, i) => (
+                <div key={k} className="rounded bg-slate-50 px-1.5 py-1 text-center text-slate-600">
+                  {CALL_LABELS[i]}: {entry[k] || "-"}
+                </div>
+              ))}
+            </div>
+          </div>
+          {row("고객의사", entry.intent)}
+          {row("싯플랜확정", entry.seatplan)}
+          {row("상담확정", entry.consult)}
+          {row("클로징확정", entry.closing)}
+          {row("월납보험료", entry.premium ? `${Number(entry.premium).toLocaleString("ko-KR")}원` : "")}
+          {row("비고", entry.note)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 관리자 대시보드 하단: 인원별 상세 목록 뷰어
+function AdminDetailViewer({ entries }) {
+  const [who, setWho] = useState(NAMES[0]);
+  const [mon, setMon] = useState("전체");
+  const list = entries
+    .filter((e) => e.owner === who)
+    .filter((e) => (mon === "전체" ? true : e.purchaseMonth === mon));
+
+  return (
+    <section>
+      <div className="mb-2 text-sm font-semibold text-slate-700">인원별 상세 목록 (개별 입력 내용 보기)</div>
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        {NAMES.map((n) => (
+          <button key={n} onClick={() => setWho(n)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${who === n ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}>
+            {n}
+          </button>
+        ))}
+      </div>
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        {["전체", ...MONTHS].map((m) => (
+          <button key={m} onClick={() => setMon(m)} className={`rounded-full px-2.5 py-1 text-xs ${mon === m ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-500"}`}>
+            {m}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-2">
+        {list.length === 0 && <div className="py-6 text-center text-sm text-slate-400">{who}님이 입력한 {mon !== "전체" ? mon + " " : ""}내역이 없습니다</div>}
+        {list.map((e) => (
+          <ReadonlyCard key={e.id} entry={e} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function PersonRow({ name, entries }) {
   const [open, setOpen] = useState(false);
   const stats = computeStats(entries);
@@ -314,6 +425,11 @@ export default function App() {
   const [monthFilter, setMonthFilter] = useState("7월");
   const [showAllOwners, setShowAllOwners] = useState(false);
 
+  // 내가 방금 편집 중인 항목: 실시간 에코가 이 항목을 덮어쓰지 않도록 잠깐 보호
+  const editingRef = useRef({}); // { [id]: 마지막_편집시각(ms) }
+  const saveTimers = useRef({}); // { [id]: setTimeout 핸들 }
+  const EDIT_GUARD_MS = 2500;
+
   useEffect(() => {
     if (!configured) {
       setLoaded(true);
@@ -333,6 +449,11 @@ export default function App() {
               return prev.filter((e) => e.id !== payload.old.id);
             }
             const next = fromRow(payload.new);
+            // 내가 지금 편집 중인 항목이면 서버 값으로 덮어쓰지 않음 (글자 튐 방지)
+            const lastEdit = editingRef.current[next.id];
+            if (lastEdit && Date.now() - lastEdit < EDIT_GUARD_MS) {
+              return prev;
+            }
             const exists = prev.some((e) => e.id === next.id);
             return exists ? prev.map((e) => (e.id === next.id ? next : e)) : [next, ...prev];
           });
@@ -341,6 +462,7 @@ export default function App() {
     })();
     return () => {
       if (channel) supabase.removeChannel(channel);
+      Object.values(saveTimers.current).forEach((t) => clearTimeout(t));
     };
   }, []);
 
@@ -354,9 +476,19 @@ export default function App() {
     setEntries((prev) => [e, ...prev]);
     await supabase.from("entries").insert(toRow(e));
   }
-  async function updateEntry(id, next) {
+
+  // 타이핑 중엔 화면(state)만 즉시 갱신하고, 서버 저장은 0.6초 멈춘 뒤 한 번만 실행
+  function updateEntry(id, next) {
+    editingRef.current[id] = Date.now();
     setEntries((prev) => prev.map((e) => (e.id === id ? next : e)));
-    await supabase.from("entries").update(toRow(next)).eq("id", id);
+    if (saveTimers.current[id]) clearTimeout(saveTimers.current[id]);
+    saveTimers.current[id] = setTimeout(async () => {
+      editingRef.current[id] = Date.now();
+      await supabase.from("entries").update(toRow(next)).eq("id", id);
+      setTimeout(() => {
+        delete editingRef.current[id];
+      }, 800);
+    }, 600);
   }
   async function deleteEntry(id) {
     setEntries((prev) => prev.filter((e) => e.id !== id));
@@ -390,7 +522,7 @@ export default function App() {
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "전체현황");
 
-    const dataHeader = ["구매월", "구매일자", "고객명", ...CALL_LABELS, "고객의사", "싯플랜확정", "상담확정", "클로징확정", "월납보험료", "비고"];
+    const dataHeader = ["구매월", "구매일자", "고객명", "진행방식", ...CALL_LABELS, "고객의사", "싯플랜확정", "상담확정", "클로징확정", "월납보험료", "비고"];
     NAMES.forEach((n) => {
       const list = entries.filter((e) => e.owner === n);
       const s = computeStats(list);
@@ -405,7 +537,7 @@ export default function App() {
       });
       rows.push([]);
       rows.push(dataHeader);
-      list.forEach((e) => rows.push([e.purchaseMonth, formatDate(e.purchaseDate), e.customerName, ...CALL_KEYS.map((k) => e[k]), e.intent, e.seatplan, e.consult, e.closing, e.premium, e.note]));
+      list.forEach((e) => rows.push([e.purchaseMonth, formatDate(e.purchaseDate), e.customerName, e.method, ...CALL_KEYS.map((k) => e[k]), e.intent, e.seatplan, e.consult, e.closing, e.premium, e.note]));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), n);
     });
 
@@ -532,6 +664,8 @@ export default function App() {
               </div>
             </section>
           )}
+
+          {currentUser === "관리자" && <AdminDetailViewer entries={entries} />}
         </div>
       )}
     </div>
