@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Plus, Download, ChevronDown, ChevronRight, Trash2, Users, LayoutDashboard, ClipboardList, LogOut } from "lucide-react";
+import { Plus, Download, ChevronDown, ChevronRight, Trash2, Users, LayoutDashboard, ClipboardList, LogOut, Star } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase, configured } from "./supabaseClient";
 
@@ -36,7 +36,7 @@ function formatDate(v) {
   return /^\d{1,2}$/.test(t) ? `${t}일` : t;
 }
 function emptyEntry(owner, month) {
-  const e = { id: uid(), owner, purchaseMonth: month, purchaseDate: "", customerName: "", method: "전화", intent: "", seatplan: "", consult: "", closing: "", premium: "", note: "" };
+  const e = { id: uid(), owner, purchaseMonth: month, purchaseDate: "", customerName: "", favorite: false, method: "전화", intent: "", seatplan: "", consult: "", closing: "", premium: "", note: "" };
   CALL_KEYS.forEach((k) => (e[k] = ""));
   return e;
 }
@@ -57,6 +57,32 @@ function computeStats(list) {
   };
 }
 
+// 상태 뱃지 (골드/네이비 톤)
+function stageBadge(entry) {
+  if (entry.closing === "예") return { text: "클로징확정", cls: "bg-[#c8a24a] text-[#23405f] border border-[#c8a24a]" };
+  if (entry.consult === "예") return { text: "상담확정", cls: "border border-[#c8a24a] text-[#efe3c2]" };
+  if (entry.seatplan === "예") return { text: "싯플랜확정", cls: "border border-[#c8a24a] text-[#efe3c2]" };
+  return { text: "진행중", cls: "border border-[#6f8db4] text-[#d3e0f0]" };
+}
+
+// 접힌 카드에 보일 진행도 태그들
+function progressTags(entry) {
+  const tags = [];
+  tags.push({ label: entry.method === "채팅" ? "채팅" : "전화", tone: entry.method === "채팅" ? "chat" : "method" });
+  tags.push({ label: entry.seatplan === "예" ? "싯플랜 확정" : "싯플랜 대기", tone: entry.seatplan === "예" ? "on" : "wait" });
+  tags.push({ label: entry.consult === "예" ? "상담 확정" : "상담 대기", tone: entry.consult === "예" ? "on" : "wait" });
+  if (entry.closing === "예") tags.push({ label: "클로징 확정", tone: "on" });
+  if (entry.intent) tags.push({ label: entry.intent, tone: "intent" });
+  return tags;
+}
+const TAG_TONE = {
+  method: "bg-[#eef2f7] text-[#42546b]",
+  chat: "bg-[#eaf3ee] text-[#2f7d55]",
+  on: "bg-[#faf4e2] text-[#96751f] ring-1 ring-inset ring-[#efe3c2]",
+  wait: "bg-slate-100 text-slate-400",
+  intent: "bg-[#eef3fb] text-[#2b6cb0]",
+};
+
 // Supabase row(snake_case) <-> 앱 내부 entry(camelCase) 변환
 function fromRow(r) {
   return {
@@ -65,6 +91,7 @@ function fromRow(r) {
     purchaseMonth: r.purchase_month || "",
     purchaseDate: r.purchase_date || "",
     customerName: r.customer_name || "",
+    favorite: !!r.favorite,
     method: r.method || "전화",
     call1: r.call1 || "",
     call2: r.call2 || "",
@@ -87,6 +114,7 @@ function toRow(e) {
     purchase_month: e.purchaseMonth,
     purchase_date: e.purchaseDate,
     customer_name: e.customerName,
+    favorite: !!e.favorite,
     method: e.method,
     call1: e.call1,
     call2: e.call2,
@@ -118,24 +146,42 @@ const selectCls = inputCls + " appearance-none";
 function EntryCard({ entry, onChange, onDelete }) {
   const [open, setOpen] = useState(false);
   const callDone = CALL_KEYS.filter((k) => entry[k]).length;
-  const badge =
-    entry.closing === "예" ? "bg-emerald-100 text-emerald-700" : entry.consult === "예" ? "bg-sky-100 text-sky-700" : entry.seatplan === "예" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500";
-  const badgeText = entry.closing === "예" ? "클로징확정" : entry.consult === "예" ? "상담확정" : entry.seatplan === "예" ? "싯플랜확정" : "진행중";
+  const badge = stageBadge(entry);
+  const tags = progressTags(entry);
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
-        <div className="flex min-w-0 items-center gap-2">
-          {open ? <ChevronDown size={16} className="shrink-0 text-slate-400" /> : <ChevronRight size={16} className="shrink-0 text-slate-400" />}
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-start justify-between gap-2 bg-[#3f6ea3] px-3 py-2.5 text-white">
+        <button onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-start gap-2 text-left">
+          {open ? <ChevronDown size={16} className="mt-0.5 shrink-0 text-[#a9c0dd]" /> : <ChevronRight size={16} className="mt-0.5 shrink-0 text-[#a9c0dd]" />}
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-800">{entry.customerName || "(고객명 미입력)"}</div>
-            <div className="truncate text-xs text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-sm font-bold">{entry.customerName || "(고객명 미입력)"}</span>
+            </div>
+            <div className="mt-0.5 truncate text-[11.5px] text-[#b4c6dd]">
               {entry.purchaseMonth} · {formatDate(entry.purchaseDate) || "일자 미입력"}{entry.method === "채팅" ? " · 💬채팅" : ` · 콜 ${callDone}/6`}
             </div>
           </div>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={() => onChange({ ...entry, favorite: !entry.favorite })}
+            aria-label="즐겨찾기"
+            className="p-0.5"
+          >
+            <Star size={18} className={entry.favorite ? "fill-[#f5b301] text-[#f5b301]" : "text-[#7d97ba]"} />
+          </button>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${badge.cls}`}>{badge.text}</span>
         </div>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${badge}`}>{badgeText}</span>
-      </button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 px-3 py-2.5">
+        {tags.map((t, i) => (
+          <span key={i} className={`rounded-md px-2 py-1 text-[11px] font-medium ${TAG_TONE[t.tone]}`}>
+            {t.label}
+          </span>
+        ))}
+      </div>
 
       {open && (
         <div className="space-y-3 border-t border-slate-100 px-3 pb-3 pt-3">
@@ -147,7 +193,7 @@ function EntryCard({ entry, onChange, onDelete }) {
                     key={m}
                     onClick={() => onChange({ ...entry, purchaseMonth: m })}
                     className={`flex-1 rounded-lg border px-1.5 py-1.5 text-xs font-medium ${
-                      entry.purchaseMonth === m ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 text-slate-500"
+                      entry.purchaseMonth === m ? "border-[#3f6ea3] bg-[#3f6ea3] text-white" : "border-slate-200 text-slate-500"
                     }`}
                   >
                     {m}
@@ -171,7 +217,7 @@ function EntryCard({ entry, onChange, onDelete }) {
                   key={m}
                   onClick={() => onChange({ ...entry, method: m })}
                   className={`flex-1 rounded-lg border px-2 py-2 text-xs font-medium ${
-                    entry.method === m ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 text-slate-500"
+                    entry.method === m ? "border-[#3f6ea3] bg-[#3f6ea3] text-white" : "border-slate-200 text-slate-500"
                   }`}
                 >
                   {m}
@@ -228,7 +274,13 @@ function EntryCard({ entry, onChange, onDelete }) {
           </Field>
 
           <Field label="비고">
-            <input className={inputCls} placeholder="메모" value={entry.note} onChange={(e) => onChange({ ...entry, note: e.target.value })} />
+            <textarea
+              className={inputCls + " min-h-[80px] resize-y leading-relaxed"}
+              rows={3}
+              placeholder="메모 (여러 줄 입력 가능)"
+              value={entry.note}
+              onChange={(e) => onChange({ ...entry, note: e.target.value })}
+            />
           </Field>
 
           <button onClick={onDelete} className="flex items-center gap-1 text-xs font-medium text-rose-500">
@@ -291,9 +343,8 @@ function MonthTable({ entries }) {
 function ReadonlyCard({ entry }) {
   const [open, setOpen] = useState(false);
   const callDone = CALL_KEYS.filter((k) => entry[k]).length;
-  const badge =
-    entry.closing === "예" ? "bg-emerald-100 text-emerald-700" : entry.consult === "예" ? "bg-sky-100 text-sky-700" : entry.seatplan === "예" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500";
-  const badgeText = entry.closing === "예" ? "클로징확정" : entry.consult === "예" ? "상담확정" : entry.seatplan === "예" ? "싯플랜확정" : "진행중";
+  const badge = stageBadge(entry);
+  const tags = progressTags(entry);
 
   const row = (label, value) => (
     <div className="flex justify-between gap-2 py-1 text-xs">
@@ -303,19 +354,29 @@ function ReadonlyCard({ entry }) {
   );
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
-        <div className="flex min-w-0 items-center gap-2">
-          {open ? <ChevronDown size={16} className="shrink-0 text-slate-400" /> : <ChevronRight size={16} className="shrink-0 text-slate-400" />}
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-start justify-between gap-2 bg-[#3f6ea3] px-3 py-2.5 text-left text-white">
+        <div className="flex min-w-0 items-start gap-2">
+          {open ? <ChevronDown size={16} className="mt-0.5 shrink-0 text-[#a9c0dd]" /> : <ChevronRight size={16} className="mt-0.5 shrink-0 text-[#a9c0dd]" />}
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-800">{entry.customerName || "(고객명 미입력)"}</div>
-            <div className="truncate text-xs text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-sm font-bold">{entry.customerName || "(고객명 미입력)"}</span>
+              {entry.favorite && <Star size={14} className="shrink-0 fill-[#f5b301] text-[#f5b301]" />}
+            </div>
+            <div className="mt-0.5 truncate text-[11.5px] text-[#b4c6dd]">
               {entry.purchaseMonth} · {formatDate(entry.purchaseDate) || "일자 미입력"}{entry.method === "채팅" ? " · 💬채팅" : ` · 콜 ${callDone}/6`}
             </div>
           </div>
         </div>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${badge}`}>{badgeText}</span>
+        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${badge.cls}`}>{badge.text}</span>
       </button>
+      <div className="flex flex-wrap gap-1.5 px-3 py-2.5">
+        {tags.map((t, i) => (
+          <span key={i} className={`rounded-md px-2 py-1 text-[11px] font-medium ${TAG_TONE[t.tone]}`}>
+            {t.label}
+          </span>
+        ))}
+      </div>
       {open && (
         <div className="border-t border-slate-100 px-3 pb-3 pt-2">
           {row("구매월", entry.purchaseMonth)}
@@ -337,7 +398,10 @@ function ReadonlyCard({ entry }) {
           {row("상담확정", entry.consult)}
           {row("클로징확정", entry.closing)}
           {row("월납보험료", entry.premium ? `${Number(entry.premium).toLocaleString("ko-KR")}원` : "")}
-          {row("비고", entry.note)}
+          <div className="py-1 text-xs">
+            <div className="mb-1 text-slate-400">비고</div>
+            <div className="whitespace-pre-wrap break-words rounded bg-slate-50 px-2 py-1.5 text-slate-700">{entry.note || "-"}</div>
+          </div>
         </div>
       )}
     </div>
@@ -424,6 +488,7 @@ export default function App() {
   const [tab, setTab] = useState("entry");
   const [monthFilter, setMonthFilter] = useState("7월");
   const [showAllOwners, setShowAllOwners] = useState(false);
+  const [favOnly, setFavOnly] = useState(false);
 
   // 내가 방금 편집 중인 항목: 실시간 에코가 이 항목을 덮어쓰지 않도록 잠깐 보호
   const editingRef = useRef({}); // { [id]: 마지막_편집시각(ms) }
@@ -496,7 +561,10 @@ export default function App() {
   }
 
   const myEntries = useMemo(() => (showAllOwners ? entries : entries.filter((e) => e.owner === currentUser)), [entries, showAllOwners, currentUser]);
-  const monthEntries = useMemo(() => myEntries.filter((e) => e.purchaseMonth === monthFilter), [myEntries, monthFilter]);
+  const monthEntries = useMemo(
+    () => myEntries.filter((e) => (favOnly ? e.favorite : e.purchaseMonth === monthFilter)),
+    [myEntries, monthFilter, favOnly]
+  );
 
   const [dashFilter, setDashFilter] = useState("전체");
   const dashEntries = useMemo(() => (dashFilter === "전체" ? entries : entries.filter((e) => e.owner === dashFilter)), [entries, dashFilter]);
@@ -522,7 +590,7 @@ export default function App() {
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "전체현황");
 
-    const dataHeader = ["구매월", "구매일자", "고객명", "진행방식", ...CALL_LABELS, "고객의사", "싯플랜확정", "상담확정", "클로징확정", "월납보험료", "비고"];
+    const dataHeader = ["즐겨찾기", "구매월", "구매일자", "고객명", "진행방식", ...CALL_LABELS, "고객의사", "싯플랜확정", "상담확정", "클로징확정", "월납보험료", "비고"];
     NAMES.forEach((n) => {
       const list = entries.filter((e) => e.owner === n);
       const s = computeStats(list);
@@ -537,7 +605,7 @@ export default function App() {
       });
       rows.push([]);
       rows.push(dataHeader);
-      list.forEach((e) => rows.push([e.purchaseMonth, formatDate(e.purchaseDate), e.customerName, e.method, ...CALL_KEYS.map((k) => e[k]), e.intent, e.seatplan, e.consult, e.closing, e.premium, e.note]));
+      list.forEach((e) => rows.push([e.favorite ? "★" : "", e.purchaseMonth, formatDate(e.purchaseDate), e.customerName, e.method, ...CALL_KEYS.map((k) => e[k]), e.intent, e.seatplan, e.consult, e.closing, e.premium, e.note]));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), n);
     });
 
@@ -594,28 +662,45 @@ export default function App() {
 
       {tab === "entry" && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {MONTHS.map((m) => (
               <button
                 key={m}
-                onClick={() => setMonthFilter(m)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium ${monthFilter === m ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}
+                onClick={() => {
+                  setMonthFilter(m);
+                  setFavOnly(false);
+                }}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium ${!favOnly && monthFilter === m ? "bg-[#3f6ea3] text-white" : "bg-slate-100 text-slate-500"}`}
               >
                 {m}
               </button>
             ))}
+            <button
+              onClick={() => setFavOnly((v) => !v)}
+              className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                favOnly ? "bg-[#f5b301] text-white" : "bg-[#fff7e0] text-[#b4820a] ring-1 ring-inset ring-[#f4e2ad]"
+              }`}
+            >
+              <Star size={13} className={favOnly ? "fill-white text-white" : "fill-[#f5b301] text-[#f5b301]"} /> 즐겨찾기
+            </button>
             <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
               <input type="checkbox" checked={showAllOwners} onChange={(e) => setShowAllOwners(e.target.checked)} />
               전체보기
             </label>
           </div>
 
-          <button onClick={addEntry} className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-500 active:bg-slate-50">
-            <Plus size={16} /> {monthFilter} 신규 DB 추가
-          </button>
+          {!favOnly && (
+            <button onClick={addEntry} className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-500 active:bg-slate-50">
+              <Plus size={16} /> {monthFilter} 신규 DB 추가
+            </button>
+          )}
 
           <div className="space-y-2">
-            {monthEntries.length === 0 && <div className="py-8 text-center text-sm text-slate-400">{monthFilter}에 등록된 DB가 없습니다</div>}
+            {monthEntries.length === 0 && (
+              <div className="py-8 text-center text-sm text-slate-400">
+                {favOnly ? "즐겨찾기한 고객이 없습니다 (카드의 ★를 눌러 추가하세요)" : `${monthFilter}에 등록된 DB가 없습니다`}
+              </div>
+            )}
             {monthEntries.map((e) => (
               <EntryCard key={e.id} entry={e} onChange={(next) => updateEntry(e.id, next)} onDelete={() => deleteEntry(e.id)} />
             ))}
